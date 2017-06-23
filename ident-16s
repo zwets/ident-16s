@@ -1,0 +1,164 @@
+#!/bin/sh
+#
+#  ident-16s - rapid identification of bacterial species from FASTA
+#  (c) 2017 Marco van Zwetselaar <io@zwets.it>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+#  Home: https://github.io/zwets/ident-16s
+
+# Defaults and parameters
+BASE_DIR="$(realpath "$(dirname "$0")")"
+TMP_DIR="/tmp/$(basename "$0").$$"
+DB_NAME="16SMicrobial"
+DB_FILE="${DB_NAME}.nhr"
+INPUT_FNA="$TMP_DIR/input.fna"
+FOUND_16S="$TMP_DIR/found.fna"
+MATCH_16S="$TMP_DIR/match.fna"
+RETVAL=1
+
+# Function to exit this script with message $* on stderr
+err_exit() {
+    echo "$(basename "$0"): $*" >&2
+    exit $RETVAL
+}
+
+# Function to emit $* to standard error if VERBOSE is set
+emit() {
+    [ -z "$VERBOSE" ] || echo "$(basename "$0"): $*" >&2 || true
+}
+
+# Cleanup on exit
+cleanup() {
+    emit "clean up $TMP_DIR"
+    [ ! -d "$TMP_DIR" ] || rm -rf "$TMP_DIR" ] || true
+    exit $RETVAL
+}
+
+# Function checks if $1 is on the path or error exits
+check_dep() {
+    emit "checking dependency: $1"
+    command -v "$1" >/dev/null || err_exit "missing command, please install: $1"
+}
+
+# Function either unzips file $1 to $2 or links to original
+unzip_or_link() {
+    [ -f "$1" ] && [ -r "$1" ] || err_exit "no such file: $1"
+    case "$(file --mime-type --brief "$1")" in
+    "application/x-xz")
+        emit "unxzipping $1 to $2"
+        xz -dc "$1" >"$2"
+        ;;
+    "application/gzip")
+        emit "ungzipping $1 to $2"
+        gzip -dc "$1" >"$2"
+        ;;
+    *)  emit "linking $1 to $2"
+        ln -sf "$1" "$2"
+        ;;
+    esac
+}
+
+# Function to show usage information and exit with code $* (default 1)
+usage_exit() {
+    echo "
+Usage: $(basename $0) [OPTIONS] [FILE]
+
+  Identify the bacterial species in FASTA format FILE by 16S rRNA identity.
+  If no FILE is given or FILE is '-', read from standard input.  FILE may
+  be xz or gzip compressed.
+
+  OPTIONS
+   -s, --sequence  output the 16S rRNA sequence(s) found
+   -v, --verbose   show progress information on standard error
+   -h, --help      this information
+" >&2
+    RETVAL=${1:-1}
+    exit $RETVAL
+}
+
+# Parse options
+
+unset VERBOSE SEQUENCE
+while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
+    case $1 in
+    -s|--sequence)
+        SEQUENCE=1
+        ;;
+    -v|--verbose)
+        VERBOSE=1
+        ;;
+    -h|--help)
+        usage_exit 0
+        ;;
+    *) usage_exit
+        ;;
+    esac
+    shift
+done
+
+# Set paths to dependencies if locally installed (see the README.md)
+
+[ ! -d "$BASE_DIR/barrnap" ] || PATH="$PATH:$BASE_DIR/barrnap/bin"
+[ ! -d "$BASE_DIR/unfasta" ] || PATH="$PATH:$BASE_DIR/unfasta"
+[ ! -f "$BASE_DIR/$DB_FILE" ] || BLASTDB="$BASE_DIR"
+
+# Check presence of dependencies
+
+for P in barrnap uf uf-select uf-cut grep awk blastn; do check_dep "$P"; done
+
+[ -n "$BLASTDB" ] && [ -f "$BLASTDB/$DB_FILE" ] || [ -n "$NCBI" ] || [ -f "$DB_FILE" ] ||
+    err_exit "NCBI nor BLASTDB are set, and the $DB_NAME database is not in PWD or $BASE_DIR"
+
+# Create working directory
+
+emit "creating work directory: $TMP_DIR"
+mkdir -p "$TMP_DIR"
+
+# Handle arguments
+
+if [ $# -eq 0 ]; then
+    emit "copying stdin to $INPUT_FNA"
+    cat > "$INPUT_FNA"  # Need to store the input for barrnap
+elif [ $# -eq 1 ]; then
+    unzip_or_link "$1" "$INPUT_FNA"
+else
+    usage_exit
+fi
+
+# Main
+
+emit "invoking barrnap to locate rRNA"
+barrnap --quiet "$INPUT_FNA" | awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}' | while read SEQID RANGE; do
+
+    emit "extracting range $RANGE from contig $SEQID"
+    uf "$INPUT_FNA" | uf-select -i "$SEQID" | uf-cut -m "$RANGE" | uf-map -t 'sed -e s,^>,>16S_rRNA_from_,'
+
+done > "$FOUND_16S"
+
+# Blast the found sequence against 16SMicrobial
+
+# @TODO: filter on perc_identity and subject coverage (not query coverage, because the subject is the reference)
+emit "searching for matching reference"
+blastn -db "$DB_NAME" -max_target_seqs 1 -outfmt '7 sseqid saccver staxids qlen slen length pident qseq sseq sscinames' -query "$FOUND_16S"  |
+grep -v '^#' |
+while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID QSEQ SSEQ SPECIES; do
+    # @TODO: filter and output selection of other things
+    #printf "Sequence: %s\nTaxon   : %s\nPercent : %s\nSpecies : %s\n" "$SID" "$TAX" "$PCT" "$SPC"
+    echo "$SPECIES"
+done
+    
+RETVAL=0
+
+# vim: sts=4:sw=4:et:si:ai

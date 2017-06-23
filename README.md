@@ -50,6 +50,8 @@ you will need to install its dependencies.  There are two ways to do this.
 
         git clone 'https://github.com/tseemann/barrnap.git'
 
+   Note: on Ubuntu you can instead `sudo apt install barrnap`.
+
 1. Add `unfasta` to the directory:
 
         git clone 'https://github.com/zwets/unfasta.git'
@@ -77,7 +79,7 @@ setting `BLASTDB` or by defining it in your `.ncbirc` file.
 
 ## License
 
-ident-16s - Rapid identification of bacterial species from FASTA contigs  
+ident-16s - Rapid identification of bacterial species from FASTA  
 Copyright (C) 2017  Marco van Zwetselaar
 
 This program is free software: you can redistribute it and/or modify
