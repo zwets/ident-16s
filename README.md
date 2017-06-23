@@ -1,0 +1,95 @@
+# ident-16s
+
+Rapid identification of bacterial species from FASTA contigs.
+
+Home: https://github.com/zwets/ident-16s
+
+
+## Introduction
+
+`ident-16s` is a simple script that, in the spirit of the
+[Small Tools Manifesto for Bioinformatics](https://github.com/pjotrp/bioinformatics),
+leverages several other open source tools to perform rapid 16S rRNA
+microbial identification.
+
+`ident-16s` uses 
+* [barrnap](https://github.com/tseemann/barrnap) to predict the locations
+  of 16S rRNA genes in a set of FASTA sequences, then uses
+* [unfasta](https://io.zwets.it/unfasta) to extract the gene sequence(s), and
+* [BLAST](https://en.wikipedia.org/wiki/BLAST) to match these against reference sequences in the
+  [Bacterial 16S rRNA database](https://www.ncbi.nlm.nih.gov/genomes/static/refseqtarget.html).
+* The usual GNU tools (`grep`, `sed`, `awk`, ...) are the duct tape holding
+  it all together.
+
+
+## Usage
+
+The script is self-contained.  Run it with the `--help` option to see usage
+instructions:
+
+    ./ident-16s --help
+
+
+## Installing
+
+As `ident-16s` is a plain `sh` script, it requires no installation.  However,
+you will need to install its dependencies.  There are two ways to do this.
+
+### Simple installation
+
+1. Obtain `ident-16s` from GitHub:
+
+        git clone 'https://github.com/zwets/ident-16s.git'
+
+   The `ident-16s` script is now installed in directory `./ident-16s`:
+
+        cd ./ident-16s
+        ./ident-16s --help
+
+1. Add `barrnap` to the directory:
+
+        git clone 'https://github.com/tseemann/barrnap.git'
+
+1. Add `unfasta` to the directory:
+
+        git clone 'https://github.com/zwets/unfasta.git'
+
+1. Add the `16SMicrobial` database to the directory:
+
+        wget -O - 'ftp://ftp.ncbi.nlm.nih.gov/blast/db/16SMicrobial.tar.gz' | tar xz
+
+1. Run test
+
+        ./ident-16s test/ecoli.fna.gz
+
+   This will either succeed and you're done, or it may report missing
+   dependencies that should be easily installable using your machine's
+   package manager.
+
+### Complex installation
+
+The more experienced POSIX user may prefer to install `ident-16s`'s
+dependencies the 'proper' way.  That's fine.  Just make sure that `barrnap`
+and the `unfasta` scripts are on the `PATH`, and that the `16SMicrobial`
+database is visible to to the NCBI blast programs. This can be done by
+setting `BLASTDB` or by defining it in your `.ncbirc` file.
+
+
+## License
+
+ident-16s - Rapid identification of bacterial species from FASTA contigs  
+Copyright (C) 2017  Marco van Zwetselaar
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
