@@ -18,20 +18,29 @@
 #
 #  Home: https://github.io/zwets/ident-16s
 
-# Defaults and parameters
-BASE_DIR="$(realpath "$(dirname "$0")")"
-TMP_DIR="/tmp/$(basename "$0").$$"
+# Default parameters
+MIN_COVERAGE=60
+MIN_IDENTITY=98.0
+MAX_MATCHES=1
+
+# Constants
+PROG_DIR="$(realpath "$(dirname "$0")")"
+WORK_DIR="/tmp/$(basename "$0").$$"
+INPUT_FNA="$WORK_DIR/input.fna"
+FOUND_16S="$WORK_DIR/found.fna"
+MATCH_16S="$WORK_DIR/match.fna"
 DB_NAME="16SMicrobial"
 DB_FILE="${DB_NAME}.nhr"
-INPUT_FNA="$TMP_DIR/input.fna"
-FOUND_16S="$TMP_DIR/found.fna"
-MATCH_16S="$TMP_DIR/match.fna"
-RETVAL=1
+
+# Fail fast and trap exit for WORK_DIR cleanup
+set -e
+trap cleanup EXIT
+EXIT_STATUS=0
 
 # Function to exit this script with message $* on stderr
 err_exit() {
     echo "$(basename "$0"): $*" >&2
-    exit $RETVAL
+    exit
 }
 
 # Function to emit $* to standard error if VERBOSE is set
@@ -41,9 +50,9 @@ emit() {
 
 # Cleanup on exit
 cleanup() {
-    emit "clean up $TMP_DIR"
-    [ ! -d "$TMP_DIR" ] || rm -rf "$TMP_DIR" ] || true
-    exit $RETVAL
+    emit "clean up $WORK_DIR"
+    [ ! -d "$WORK_DIR" ] || rm -rf "$WORK_DIR" ] || true
+    exit $EXIT_STATUS
 }
 
 # Function checks if $1 is on the path or error exits
@@ -70,7 +79,7 @@ unzip_or_link() {
     esac
 }
 
-# Function to show usage information and exit with code $* (default 1)
+# Function to show usage information and exit with code $1 (default 1)
 usage_exit() {
     echo "
 Usage: $(basename $0) [OPTIONS] [FILE]
@@ -80,51 +89,80 @@ Usage: $(basename $0) [OPTIONS] [FILE]
   be xz or gzip compressed.
 
   OPTIONS
-   -s, --sequence  output the 16S rRNA sequence(s) found
-   -v, --verbose   show progress information on standard error
-   -h, --help      this information
+   -c, --coverage COV  reference coverage threshold (default $MIN_COVERAGE)
+   -i, --identity PCT  identity percentage threshold (default $MIN_IDENTITY)
+   -m, --matches N     maximum number of matches per 16S gene (default $MAX_MATCHES)
+   -u, --unique        filter duplicate matches from output
+   -l, --long-output   output all information about the matches
+   -g, --genes-only    only output the 16S genes found in FILE, no matching
+   -v, --verbose       show progress information on standard error
+   -h, --help          this information
+
+  The script operates by first extracting predicted 16S rRNA genes from FILE,
+  then finding for each predicted gene the N (default $MAX_MATCHES) best matches in the
+  $DB_NAME database that meet the coverage (default $MIN_COVERAGE) and identity
+  (default $MIN_IDENTITY) percentages.
+
+  By default the script outputs the scientific name of each match, one per
+  line.  Option -u filters the duplicates that may occur when there are
+  multiple gene copies, or when -m is set to a value greater than 1.
+
+  Option -l returns all information pertaining to each match.  Output is in
+  tab-separated columns: species, taxid, accession, gene/reference length,
+  coverage, identity.
+
+  Use option -g, --genes-only to just extract the 16S rRNA genes, without
+  performing the matching and identification step.
+
+  NOTE: percentage identity applies to the section of the reference that was
+  covered by the predicted gene.  Finding 98% identity at the default coverage
+  setting therefore does not strictly 'prove' species identity.
 " >&2
-    RETVAL=${1:-1}
-    exit $RETVAL
+    EXIT_STATUS=${1:-1}
+    exit
 }
 
 # Parse options
 
-unset VERBOSE SEQUENCE
+unset VERBOSE UNIQ_OUTPUT LONG_OUTPUT GENES_ONLY 
 while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
     case $1 in
-    -s|--sequence)
-        SEQUENCE=1
-        ;;
-    -v|--verbose)
-        VERBOSE=1
-        ;;
-    -h|--help)
-        usage_exit 0
-        ;;
-    *) usage_exit
-        ;;
+    --coverage=*)   MIN_COVERAGE="${1#--*=}" ;;
+    -c|--coverage)  shift; MIN_COVERAGE="$1" ;;
+    --identity=*)   MIN_IDENTITY="${1#--*=}" ;;
+    -i|--identity)  shift; MIN_IDENTITY="$1" ;;
+    --matches=*)    MAX_MATCHES="${1#--*=}"  ;;
+    -m|--matches)   shift; MAX_MATCHES="$1"  ;;
+    -u|--unique)    UNIQ_OUTPUT=1   ;;
+    -l|--long*)     LONG_OUTPUT=1   ;;
+    -g|--genes*)    GENES_ONLY=1   ;;
+    -v|--verbose)   VERBOSE=1    ;;
+    -h|--help)      usage_exit 0 ;;
+    *)              usage_exit   ;;
     esac
     shift
 done
 
 # Set paths to dependencies if locally installed (see the README.md)
 
-[ ! -d "$BASE_DIR/barrnap" ] || PATH="$PATH:$BASE_DIR/barrnap/bin"
-[ ! -d "$BASE_DIR/unfasta" ] || PATH="$PATH:$BASE_DIR/unfasta"
-[ ! -f "$BASE_DIR/$DB_FILE" ] || BLASTDB="$BASE_DIR"
+[ ! -d "$PROG_DIR/barrnap" ] || PATH="$PATH:$PROG_DIR/barrnap/bin"
+[ ! -d "$PROG_DIR/unfasta" ] || PATH="$PATH:$PROG_DIR/unfasta"
+[ ! -f "$PROG_DIR/$DB_FILE" ] || BLASTDB="$PROG_DIR"
 
 # Check presence of dependencies
 
-for P in barrnap uf uf-select uf-cut grep awk blastn; do check_dep "$P"; done
+for P in barrnap uf uf-select uf-cut uf-map grep awk; do check_dep "$P"; done
 
-[ -n "$BLASTDB" ] && [ -f "$BLASTDB/$DB_FILE" ] || [ -n "$NCBI" ] || [ -f "$DB_FILE" ] ||
-    err_exit "NCBI nor BLASTDB are set, and the $DB_NAME database is not in PWD or $BASE_DIR"
+[ -n "$GENES_ONLY" ] || {
+    check_dep blastn
+    [ -n "$BLASTDB" ] && [ -f "$BLASTDB/$DB_FILE" ] || [ -n "$NCBI" ] || [ -f "$DB_FILE" ] ||
+        err_exit "NCBI nor BLASTDB are set, and $DB_NAME not found in PWD or $PROG_DIR"
+}
 
 # Create working directory
 
-emit "creating work directory: $TMP_DIR"
-mkdir -p "$TMP_DIR"
+emit "creating work directory: $WORK_DIR"
+mkdir -p "$WORK_DIR"
 
 # Handle arguments
 
@@ -147,18 +185,36 @@ barrnap --quiet "$INPUT_FNA" | awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}'
 
 done > "$FOUND_16S"
 
-# Blast the found sequence against 16SMicrobial
+# When option genes-only, then we're done here
 
-# @TODO: filter on perc_identity and subject coverage (not query coverage, because the subject is the reference)
-emit "searching for matching reference"
-blastn -db "$DB_NAME" -max_target_seqs 1 -outfmt '7 sseqid saccver staxids qlen slen length pident qseq sseq sscinames' -query "$FOUND_16S"  |
-grep -v '^#' |
-while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID QSEQ SSEQ SPECIES; do
-    # @TODO: filter and output selection of other things
-    #printf "Sequence: %s\nTaxon   : %s\nPercent : %s\nSpecies : %s\n" "$SID" "$TAX" "$PCT" "$SPC"
-    echo "$SPECIES"
-done
-    
-RETVAL=0
+if [ -n "$GENES_ONLY" ]; then
+    cat "$FOUND_16S"
+    EXIT_STATUS=0
+    exit
+fi 
+
+# Blast the found sequences against 16SMicrobial
+
+if [ -s "$FOUND_16S" ]; then
+    emit "searching for matching reference"
+    blastn -db "$DB_NAME" -perc_identity $MIN_IDENTITY -max_target_seqs $MAX_MATCHES -outfmt '7 sseqid saccver staxids qlen slen length pident sscinames' -query "$FOUND_16S"  |
+    grep -v '^#' |
+    while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID SPECIES; do
+        SCOV=$((100 * ALEN / SLEN))
+        if [ $SCOV -ge $MIN_COVERAGE ]; then
+            if [ -n "$LONG_OUTPUT" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$SCOV" "$PCTID"
+            else
+                echo "$SPECIES"
+            fi
+        else
+            emit "match coverage too low: ALEN=$ALEN/SLEN=$SLEN = $SCOV < $MIN_COVERAGE"
+        fi
+    done | awk -F '\t' -v filter="${UNIQ_OUTPUT:-0}" '!filter || !seen[$1] { print $0; seen[$1]=1 }'
+else
+    emit "no 16S rRNA was found"
+fi
+
+EXIT_STATUS=0
 
 # vim: sts=4:sw=4:et:si:ai
