@@ -27,8 +27,6 @@ MAX_MATCHES=1
 PROG_DIR="$(realpath "$(dirname "$0")")"
 WORK_DIR="/tmp/$(basename "$0").$$"
 INPUT_FNA="$WORK_DIR/input.fna"
-FOUND_16S="$WORK_DIR/found.fna"
-MATCH_16S="$WORK_DIR/match.fna"
 DB_NAME="16SMicrobial"
 DB_FILE="${DB_NAME}.nhr"
 TAB="$(printf '\t')"
@@ -46,7 +44,7 @@ err_exit() {
 
 # Function to emit $* to standard error if VERBOSE is set
 emit() {
-    [ -z "$VERBOSE" ] || echo "$(basename "$0"): $*" >&2 || true
+    [ ! $VERBOSE ] || echo "$(basename "$0"): $*" >&2 || true
 }
 
 # Cleanup on exit
@@ -59,7 +57,8 @@ cleanup() {
 # Function checks if $1 is on the path or error exits
 check_dep() {
     emit "checking dependency: $1"
-    command -v "$1" >/dev/null || err_exit "missing command, please install: $1"
+    command -v "$1" >/dev/null ||
+        err_exit "missing command (please refer to the README): $1"
 }
 
 # Function either unzips file $1 to $2 or links to original
@@ -92,33 +91,34 @@ Usage: $(basename $0) [OPTIONS] [FILE]
   OPTIONS
    -c, --coverage COV  reference coverage threshold (default $MIN_COVERAGE)
    -i, --identity PCT  identity percentage threshold (default $MIN_IDENTITY)
-   -m, --matches N     maximum number of matches per 16S gene (default $MAX_MATCHES)
-   -u, --unique        filter duplicate matches from output
-   -l, --long-output   output all information about the matches
-   -g, --genes-only    only output the 16S genes found in FILE, no matching
+   -m, --matches N     maximum number of matches per gene found (default $MAX_MATCHES)
+   -u, --unique        filter duplicate matches from output (when not --long)
+   -l, --long-output   output extended match information (see below)
+   -g, --genes-only    just output the 16S genes found in FILE, no matching
    -v, --verbose       show progress information on standard error
    -h, --help          this information
 
   The script operates by first extracting predicted 16S rRNA genes from FILE,
   then finding for each predicted gene the N (default $MAX_MATCHES) best matches in the
   $DB_NAME database that meet the coverage (default $MIN_COVERAGE) and identity
-  (default $MIN_IDENTITY) percentages.
+  (default $MIN_IDENTITY) threshold percentages.
 
-  By default the script outputs the scientific name of each match, one per
-  line.  Option -u filters the duplicates that may occur when there are
-  multiple gene copies, or when -m is set to a value greater than 1.
+  The script outputs the scientific name of each match, one per line.  With
+  option -l additional information pertaining to each match is output in tab
+  separated columns: species, taxid, accession, gene/reference length,
+  alignment length, # identical bases, % coverage, % identity.
 
-  Option -l returns all information pertaining to each match.  Output is in
-  tab-separated columns: species, taxid, accession, gene/reference length,
-  coverage, identity.
+  Option -u filters duplicates that may occur when there are multiple gene
+  copies, or when -m is set to a value greater than 1.  With option -g, no
+  matching is performed; the script only outputs the 16S rRNA genes found.
 
-  Use option -g, --genes-only to just extract the 16S rRNA genes, without
-  performing the matching and identification step.
-
-  NOTE: percentage identity applies to the section of the reference that was
-  covered by the predicted gene.  Finding 98% identity at a coverage level
-  below 100% therefore does not _strictly_ prove species identity (though it
-  would statistically).
+  NOTES
+  1/ Matches are ordered by decreasing number of identical bases in the
+     alignment.  This factors in both coverage and identity, which are not
+     suitable measures by themselves.
+  2/ Percentage identity pertains to the section of the reference that was
+     covered by the predicted gene, hence 98% identity does not strictly
+     prove species identity unless coverage is close to 100%.
 " >&2
     EXIT_STATUS=${1:-1}
     exit
@@ -135,15 +135,23 @@ while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
     -i|--identity)  shift; MIN_IDENTITY="$1" ;;
     --matches=*)    MAX_MATCHES="${1#--*=}"  ;;
     -m|--matches)   shift; MAX_MATCHES="$1"  ;;
-    -u|--unique)    UNIQ_OUTPUT=1   ;;
-    -l|--long*)     LONG_OUTPUT=1   ;;
-    -g|--genes*)    GENES_ONLY=1   ;;
-    -v|--verbose)   VERBOSE=1    ;;
-    -h|--help)      usage_exit 0 ;;
-    *)              usage_exit   ;;
+    -l|--long*)     LONG_OUTPUT=1 ;;
+    -u|--unique)    UNIQ_OUTPUT=1 ;;
+    -g|--genes*)    GENES_ONLY=1  ;;
+    -v|--verbose)   VERBOSE=1     ;;
+    -h|--help)      usage_exit 0  ;;
+    *)              usage_exit    ;;
     esac
     shift
 done
+
+# Check options
+
+[ ! $LONG_OUTPUT ] || [ ! $UNIQ_OUTPUT ] ||
+    err_exit "options --unique and --long exclude one another"
+
+[ "$(expr "$MIN_COVERAGE" : '\([0-9]\+$\)')" -eq "$MIN_COVERAGE" ] ||
+    err_exit "minimum coverage must be an integral number"
 
 # Set paths to dependencies if locally installed (see the README.md)
 
@@ -155,8 +163,10 @@ done
 
 for P in barrnap uf uf-select uf-cut uf-map grep awk; do check_dep "$P"; done
 
-[ -n "$GENES_ONLY" ] || {
+[ $GENES_ONLY ] || {
+    # Unless we are invoked to only extract 16S, we additionally need blastn and the database
     check_dep blastn
+    # This does not guarantee it's there but covers all standard setups
     [ -n "$BLASTDB" ] && [ -f "$BLASTDB/$DB_FILE" ] || [ -n "$NCBI" ] || [ -f "$DB_FILE" ] ||
         err_exit "NCBI nor BLASTDB are set, and $DB_NAME not found in PWD or $PROG_DIR"
 }
@@ -178,35 +188,62 @@ else
 fi
 
 # Main
+# Note: if you wonder where commands get their input from, note the pipes.
 
 emit "invoking barrnap to locate rRNA"
-barrnap --quiet "$INPUT_FNA" | awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}' | while read SEQID RANGE; do
 
+# Execute barrnap on the input fasta, filtering the 16S matches
+barrnap --quiet "$INPUT_FNA" |
+awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}' |
+
+# Process each 16S range barrnap found in turn
+while read SEQID RANGE; do
     emit "extracting range $RANGE from contig $SEQID"
-    uf "$INPUT_FNA" | uf-select -i "$SEQID" | uf-cut -m "$RANGE" | uf-map -t 'sed -e s,^>,>16S_rRNA_from_,'
+    i=$((i+1))
+
+    # Cut from contig SEQID the range RANGE
+    uf "$INPUT_FNA" | uf-select -i "$SEQID" | uf-cut -m "$RANGE" |
+    # and prefix its SEQID to show that it is a cut
+    uf-map -t "sed -e s,^>,>16S_rRNA_${i}_Origin_,"
 
 done |
-if [ -n "$GENES_ONLY" ]; then
-    cat
-else
-    while read HEADER; do
-        emit "processing gene: $HEADER"
-        read QUERY
 
-        { echo "$HEADER"
-          echo "$QUERY"
-        } |
-        blastn -db "$DB_NAME" -perc_identity $MIN_IDENTITY -outfmt '7 sseqid saccver staxids qlen slen length pident sscinames' |
-        grep -v '^#' |
-        while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID SPECIES; do
+if [ $GENES_ONLY ]; then
+    # When genes only, just copy the barrnap output as-is
+    cat
+
+else
+    # Output long output table header
+    [ ! $LONG_OUTPUT ] ||
+        printf '# %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "Species" "Taxid" "Accession" "Gene/Ref" "Alignment" "Ident" "Coverage" "PercIdent"
+
+    # Read each gene found by barrnap in turn
+    while read FASTA_HEADER; do
+        emit "blasting gene: $FASTA_HEADER"
+
+        # Output sequence header when long output
+        [ ! $LONG_OUTPUT ] || printf "# ${FASTA_HEADER#>}\n"
+
+        # Read the sequence and pipe into blast
+        read FASTA_SEQUENCE
+        echo "$FASTA_SEQUENCE" |
+        blastn -db "$DB_NAME" -perc_identity $MIN_IDENTITY -outfmt '6 sseqid saccver staxids qlen slen length nident pident sscinames' |
+
+        # Process every match, filtering those with subject coverage below threshold
+        while read SEQID ACCVER TAXIDS QLEN SLEN ALEN NIDENT PIDENT SPECIES; do
             SCOV=$((100 * ALEN / SLEN))
-            [ $SCOV -lt $MIN_COVERAGE ] || printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$SCOV" "$PCTID"
+            [ $SCOV -lt $MIN_COVERAGE ] ||
+                printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$ALEN" "$NIDENT" "$SCOV" "$PIDENT"
         done |
-        sort -t "$TAB" -k 6nr -k 5nr |      # order on identity first, then coverage
+
+        # Sort on descending nident, keep only to MAX_MATCHES (for this find)
+        sort -t "$TAB" -k 6nr -k 5nr -k 7nr |
         head -n "$MAX_MATCHES"
     done |
+
+    # Output either long or just species, filtering duplicates when requested
     awk -F '\t' -v long="${LONG_OUTPUT:-0}" -v filter="${UNIQ_OUTPUT:-0}" '
-        !filter || !seen[$1] { seen[$1]=1; if (long) print $0; else print $1; }'
+        !filter || !seen[$1] { if (long) print $0; else print $1; seen[$1] = 1 }'
 fi
 
 EXIT_STATUS=0
