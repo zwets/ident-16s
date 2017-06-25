@@ -31,6 +31,7 @@ FOUND_16S="$WORK_DIR/found.fna"
 MATCH_16S="$WORK_DIR/match.fna"
 DB_NAME="16SMicrobial"
 DB_FILE="${DB_NAME}.nhr"
+TAB="$(printf '\t')"
 
 # Fail fast and trap exit for WORK_DIR cleanup
 set -e
@@ -125,7 +126,7 @@ Usage: $(basename $0) [OPTIONS] [FILE]
 
 # Parse options
 
-unset VERBOSE UNIQ_OUTPUT LONG_OUTPUT GENES_ONLY 
+unset VERBOSE UNIQ_OUTPUT LONG_OUTPUT GENES_ONLY
 while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
     case $1 in
     --coverage=*)   MIN_COVERAGE="${1#--*=}" ;;
@@ -184,36 +185,28 @@ barrnap --quiet "$INPUT_FNA" | awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}'
     emit "extracting range $RANGE from contig $SEQID"
     uf "$INPUT_FNA" | uf-select -i "$SEQID" | uf-cut -m "$RANGE" | uf-map -t 'sed -e s,^>,>16S_rRNA_from_,'
 
-done > "$FOUND_16S"
-
-# When option genes-only, then we're done here
-
+done |
 if [ -n "$GENES_ONLY" ]; then
-    cat "$FOUND_16S"
-    EXIT_STATUS=0
-    exit
-fi 
-
-# Blast the found sequences against 16SMicrobial
-
-if [ -s "$FOUND_16S" ]; then
-    emit "searching for matching reference"
-    blastn -db "$DB_NAME" -perc_identity $MIN_IDENTITY -max_target_seqs $MAX_MATCHES -outfmt '7 sseqid saccver staxids qlen slen length pident sscinames' -query "$FOUND_16S"  |
-    grep -v '^#' |
-    while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID SPECIES; do
-        SCOV=$((100 * ALEN / SLEN))
-        if [ $SCOV -ge $MIN_COVERAGE ]; then
-            if [ -n "$LONG_OUTPUT" ]; then
-                printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$SCOV" "$PCTID"
-            else
-                echo "$SPECIES"
-            fi
-        else
-            emit "match coverage too low: ALEN=$ALEN/SLEN=$SLEN = $SCOV < $MIN_COVERAGE"
-        fi
-    done | awk -F '\t' -v filter="${UNIQ_OUTPUT:-0}" '!filter || !seen[$1] { print $0; seen[$1]=1 }'
+    cat
 else
-    emit "no 16S rRNA was found"
+    while read HEADER; do
+        emit "processing gene: $HEADER"
+        read QUERY
+
+        { echo "$HEADER"
+          echo "$QUERY"
+        } |
+        blastn -db "$DB_NAME" -perc_identity $MIN_IDENTITY -outfmt '7 sseqid saccver staxids qlen slen length pident sscinames' |
+        grep -v '^#' |
+        while read SEQID ACCVER TAXIDS QLEN SLEN ALEN PCTID SPECIES; do
+            SCOV=$((100 * ALEN / SLEN))
+            [ $SCOV -lt $MIN_COVERAGE ] || printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$SCOV" "$PCTID"
+        done |
+        sort -t "$TAB" -k 6nr -k 5nr |      # order on identity first, then coverage
+        head -n "$MAX_MATCHES"
+    done |
+    awk -F '\t' -v long="${LONG_OUTPUT:-0}" -v filter="${UNIQ_OUTPUT:-0}" '
+        !filter || !seen[$1] { seen[$1]=1; if (long) print $0; else print $1; }'
 fi
 
 EXIT_STATUS=0
