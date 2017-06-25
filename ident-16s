@@ -115,8 +115,9 @@ Usage: $(basename $0) [OPTIONS] [FILE]
   performing the matching and identification step.
 
   NOTE: percentage identity applies to the section of the reference that was
-  covered by the predicted gene.  Finding 98% identity at the default coverage
-  setting therefore does not strictly 'prove' species identity.
+  covered by the predicted gene.  Finding 98% identity at a coverage level
+  below 100% therefore does not _strictly_ prove species identity (though it
+  would statistically).
 " >&2
     EXIT_STATUS=${1:-1}
     exit
