@@ -92,8 +92,9 @@ Usage: $(basename $0) [OPTIONS] [FILE]
    -c, --coverage COV  reference coverage threshold (default $MIN_COVERAGE)
    -i, --identity PCT  identity percentage threshold (default $MIN_IDENTITY)
    -m, --matches N     maximum number of matches per gene found (default $MAX_MATCHES)
-   -u, --unique        filter duplicate matches from output (when not --long)
+   -d, --deduplicate   filter duplicate matches from output, keeping best
    -l, --long-output   output extended match information (see below)
+   -n, --no-headers    suppress column headers and sequence titles in output
    -g, --genes-only    just output the 16S genes found in FILE, no matching
    -v, --verbose       show progress information on standard error
    -h, --help          this information
@@ -108,14 +109,14 @@ Usage: $(basename $0) [OPTIONS] [FILE]
   separated columns: species, taxid, accession, gene/reference length,
   alignment length, # identical bases, % coverage, % identity.
 
-  Option -u filters duplicates that may occur when there are multiple gene
+  Option -d filters duplicates that may occur when there are multiple gene
   copies, or when -m is set to a value greater than 1.  With option -g, no
   matching is performed; the script only outputs the 16S rRNA genes found.
 
   NOTES
   1/ Matches are ordered by decreasing number of identical bases in the
-     alignment.  This factors in both coverage and identity, which are not
-     suitable measures by themselves.
+     alignment.  This factors in both coverage and identity, which are
+     insufficient measures by themselves.
   2/ Percentage identity pertains to the section of the reference that was
      covered by the predicted gene, hence 98% identity does not strictly
      prove species identity unless coverage is close to 100%.
@@ -126,7 +127,7 @@ Usage: $(basename $0) [OPTIONS] [FILE]
 
 # Parse options
 
-unset VERBOSE UNIQ_OUTPUT LONG_OUTPUT GENES_ONLY
+unset VERBOSE DEDUPLICATE LONG_OUTPUT GENES_ONLY
 while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
     case $1 in
     --coverage=*)   MIN_COVERAGE="${1#--*=}" ;;
@@ -135,8 +136,9 @@ while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
     -i|--identity)  shift; MIN_IDENTITY="$1" ;;
     --matches=*)    MAX_MATCHES="${1#--*=}"  ;;
     -m|--matches)   shift; MAX_MATCHES="$1"  ;;
+    -d|--dedup*)    DEDUPLICATE=1 ;;
     -l|--long*)     LONG_OUTPUT=1 ;;
-    -u|--unique)    UNIQ_OUTPUT=1 ;;
+    -n|--no-head*)  NO_HEADERS=1  ;;
     -g|--genes*)    GENES_ONLY=1  ;;
     -v|--verbose)   VERBOSE=1     ;;
     -h|--help)      usage_exit 0  ;;
@@ -146,9 +148,6 @@ while [ $# -ne 0 -a "$(expr "$1" : '\(.\)..*')" = "-" ]; do
 done
 
 # Check options
-
-[ ! $LONG_OUTPUT ] || [ ! $UNIQ_OUTPUT ] ||
-    err_exit "options --unique and --long exclude one another"
 
 [ "$(expr "$MIN_COVERAGE" : '\([0-9]\+$\)')" -eq "$MIN_COVERAGE" ] ||
     err_exit "minimum coverage must be an integral number"
@@ -187,42 +186,44 @@ else
     usage_exit
 fi
 
-# Main
-# Note: if you wonder where commands get their input from, note the pipes.
+# MAIN
+# Note: if you wonder where commands get their input from, note the pipes on preceding lines
 
 emit "invoking barrnap to locate rRNA"
 
-# Execute barrnap on the input fasta, filtering the 16S matches
+# Execute barrnap on the input fasta, grepping the 16S matches
 barrnap --quiet "$INPUT_FNA" |
 awk -b -O '/Name=16S_rRNA/ {print $1, $4 ":" $5}' |
 
-# Process each 16S range barrnap found in turn
+# Process in turn each 16S range that barrnap predicts
 while read SEQID RANGE; do
-    emit "extracting range $RANGE from contig $SEQID"
     i=$((i+1))
+    emit "extracting range $i: contig $SEQID range $RANGE"
 
     # Cut from contig SEQID the range RANGE
     uf "$INPUT_FNA" | uf-select -i "$SEQID" | uf-cut -m "$RANGE" |
-    # and prefix its SEQID to show that it is a cut
-    uf-map -t "sed -e s,^>,>16S_rRNA_${i}_Origin_,"
+    # and adorn its sequence header to show that it is a cut
+    uf-map -t "sed -re s,^>,>16S_rRNA_${i}_Origin_,"
 
 done |
 
 if [ $GENES_ONLY ]; then
+    emit "outputting the genes"
+
     # When genes only, just copy the barrnap output as-is
     cat
 
 else
-    # Output long output table header
-    [ ! $LONG_OUTPUT ] ||
+    # Output long output table header unless suppressed
+    [ ! $LONG_OUTPUT ] || [ $NO_HEADERS ] ||
         printf '# %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "Species" "Taxid" "Accession" "Gene/Ref" "Alignment" "Ident" "Coverage" "PercIdent"
 
     # Read each gene found by barrnap in turn
     while read FASTA_HEADER; do
         emit "blasting gene: $FASTA_HEADER"
 
-        # Output sequence header when long output
-        [ ! $LONG_OUTPUT ] || printf "# ${FASTA_HEADER#>}\n"
+        # Output sequence header unless suppressed or we dedupe later (add void tabs for brain dead MS Excel)
+        [ $NO_HEADERS ] || [ $DEDUPLICATE ] || printf "# ${FASTA_HEADER#>}${LONG_OUTPUT:+\t\t\t\t\t\t\t}\n"
 
         # Read the sequence and pipe into blast
         read FASTA_SEQUENCE
@@ -236,14 +237,18 @@ else
                 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$SPECIES" "$TAXIDS" "$ACCVER" "$QLEN/$SLEN" "$ALEN" "$NIDENT" "$SCOV" "$PIDENT"
         done |
 
-        # Sort on descending nident, keep only to MAX_MATCHES (for this find)
+        # Sort on descending nident, keep only top MAX_MATCHES (for this gene in the input)
         sort -t "$TAB" -k 6nr -k 5nr -k 7nr |
         head -n "$MAX_MATCHES"
     done |
 
-    # Output either long or just species, filtering duplicates when requested
-    awk -F '\t' -v long="${LONG_OUTPUT:-0}" -v filter="${UNIQ_OUTPUT:-0}" '
-        !filter || !seen[$1] { if (long) print $0; else print $1; seen[$1] = 1 }'
+    # Deduped output requires sorting again, now _across_ the genes
+    if [ $DEDUPLICATE ]; then
+        sort -t "$TAB" -k 6nr -k 5nr -k 7nr |
+        awk -b -O -F '\t' -v long="${LONG_OUTPUT:-0}" '!seen[$1] { print long ? $0 : $1; seen[$1]=1 }'
+    else
+        awk -b -O -F '\t' -v long="${LONG_OUTPUT:-0}" '{ print long ? $0 : $1 }'
+    fi
 fi
 
 EXIT_STATUS=0
