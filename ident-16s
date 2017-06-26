@@ -74,7 +74,7 @@ unzip_or_link() {
         gzip -dc "$1" >"$2"
         ;;
     *)  emit "linking $1 to $2"
-        ln -sf "$1" "$2"
+        ln -sf "$(realpath "$1")" "$2"
         ;;
     esac
 }
