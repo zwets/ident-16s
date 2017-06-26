@@ -50,7 +50,8 @@ you will need to install its dependencies.  There are two ways to do this.
 
         git clone 'https://github.com/tseemann/barrnap.git'
 
-   Note: on Ubuntu you can instead `sudo apt install barrnap`.
+   Note: on Ubuntu you can instead `sudo apt install barrnap`, though this
+   may install a less recent version.
 
 1. Add `unfasta` to the directory:
 
@@ -59,6 +60,13 @@ you will need to install its dependencies.  There are two ways to do this.
 1. Add the `16SMicrobial` database to the directory:
 
         wget -O - 'ftp://ftp.ncbi.nlm.nih.gov/blast/db/16SMicrobial.tar.gz' | tar xz
+
+1. Check that you have `blastn`:
+
+        blastn -h
+
+   If this gives a 'command not found' error, install it using your
+   favourite package manager.  On Ubuntu: `sudo apt install ncbi-blast+`.
 
 1. Run test
 
@@ -70,11 +78,12 @@ you will need to install its dependencies.  There are two ways to do this.
 
 ### Complex installation
 
-The more experienced POSIX user may prefer to install `ident-16s`'s
-dependencies the 'proper' way.  That's fine.  Just make sure that `barrnap`
-and the `unfasta` scripts are on the `PATH`, and that the `16SMicrobial`
-database is visible to to the NCBI blast programs. This can be done by
-setting `BLASTDB` or by defining it in your `.ncbirc` file.
+The more experienced POSIX user may prefer to install the dependencies the
+'proper' way.  That's fine.  You can install them anywhere you prefer, as
+long as you make sure that `barrnap`, the `unfasta` scripts, and `blastn`
+are on the `PATH`, and that the `16SMicrobial` database is visible to `blastn`.
+The latter is done by setting the `BLASTDB` or `NCBI` environment variables
+appropriately.
 
 
 ## License
