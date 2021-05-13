@@ -27,7 +27,7 @@ MAX_MATCHES=1
 PROG_DIR="$(realpath "$(dirname "$0")")"
 WORK_DIR="/tmp/$(basename "$0").$$"
 INPUT_FNA="$WORK_DIR/input.fna"
-DB_NAME="16SMicrobial"
+DB_NAME="16S_ribosomal_RNA"
 DB_FILE="${DB_NAME}.nhr"
 TAB="$(printf '\t')"
 
