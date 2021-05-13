@@ -64,7 +64,7 @@ check_dep() {
 # Function either unzips file $1 to $2 or links to original
 unzip_or_link() {
     [ -f "$1" ] && [ -r "$1" ] || err_exit "no such file: $1"
-    case "$(file --mime-type --brief "$1")" in
+    case "$(file -L --mime-type --brief "$1")" in
     "application/x-xz")
         emit "unxzipping $1 to $2"
         xz -dc "$1" >"$2"

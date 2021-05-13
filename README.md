@@ -50,16 +50,15 @@ you will need to install its dependencies.  There are two ways to do this.
 
         git clone 'https://github.com/tseemann/barrnap.git'
 
-   Note: on Ubuntu you can instead `sudo apt install barrnap`, though this
-   may install a less recent version.
+   Note: on Ubuntu you can conveniently do `sudo apt install barrnap`.
 
 1. Add `unfasta` to the directory:
 
         git clone 'https://github.com/zwets/unfasta.git'
 
-1. Add the `16SMicrobial` database to the directory:
+1. Add the `16S_ribosomal_RNA` database to the directory:
 
-        wget -O - 'ftp://ftp.ncbi.nlm.nih.gov/blast/db/16SMicrobial.tar.gz' | tar xz
+        wget -O - 'ftp://ftp.ncbi.nlm.nih.gov/blast/db/16S_ribosomal_RNA.tar.gz' | tar xz
 
 1. Check that you have `blastn`:
 
@@ -81,15 +80,17 @@ you will need to install its dependencies.  There are two ways to do this.
 The more experienced POSIX user may prefer to install the dependencies the
 'proper' way.  That's fine.  You can install them anywhere you prefer, as
 long as you make sure that `barrnap`, the `unfasta` scripts, and `blastn`
-are on the `PATH`, and that the `16SMicrobial` database is visible to `blastn`.
-The latter is done by setting the `BLASTDB` or `NCBI` environment variables
-appropriately.
+are on the `PATH`, and that the `16S_ribosomal_RNA` database is visible to
+`blastn`.  The latter can be done by setting the `BLASTDB` or `NCBI` env
+variables appropriately, and in the (weirdly hidden) `/etc/.ncbirc`.
 
 
-## License
+---
+
+#### License
 
 ident-16s - Rapid identification of bacterial species from FASTA  
-Copyright (C) 2017  Marco van Zwetselaar
+Copyright (C) 2017, 2021  Marco van Zwetselaar <io@zwets.it>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
